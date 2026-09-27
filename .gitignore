@@ -1,0 +1,6 @@
+/dist/
+/.cache/
+/config.json
+*.local.json
+*.test
+*.exe

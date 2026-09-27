@@ -1,0 +1,24 @@
+[Unit]
+Description=Local HTTP MCP for Clash and sing-box rule publishing
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=rules-mcp
+Group=rules-mcp
+WorkingDirectory=/srv/rules
+ExecStart=/opt/rules-mcp/rules-mcp -config /etc/rules-mcp/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=650
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/rules
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
