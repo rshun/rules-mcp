@@ -50,8 +50,15 @@ func TestHTTPProtocolAndTools(t *testing.T) {
 			Tools []any `json:"tools"`
 		} `json:"result"`
 	}
-	if json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Result.Tools) != 7 {
+	if json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Result.Tools) != 6 {
 		t.Fatal("tool discovery failed")
+	}
+	if strings.Contains(w.Body.String(), "rules_sync") {
+		t.Fatal("removed tool still advertised")
+	}
+	w = request(a, `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rules_sync","arguments":{}}}`, nil)
+	if !strings.Contains(w.Body.String(), `"code":-32602`) {
+		t.Fatal("removed tool still callable")
 	}
 	w = request(a, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rules_read","arguments":{"name":"sample"}}}`, nil)
 	if !strings.Contains(w.Body.String(), `"isError":false`) || !strings.Contains(w.Body.String(), "example.com") {

@@ -123,23 +123,11 @@ func TestApplyPublishesBothBranchesWithoutEditingMaster(t *testing.T) {
 type faultRunner struct {
 	base       Runner
 	failPush   bool
-	failSSH    bool
 	calls      []string
-	sshArgs    []string
-	sshInput   []byte
 	beforePush func()
 }
 
 func (r *faultRunner) Run(ctx context.Context, name string, args []string, input []byte) ([]byte, error) {
-	if name == "ssh" {
-		r.calls = append(r.calls, "ssh")
-		r.sshArgs = args
-		r.sshInput = input
-		if r.failSSH {
-			return nil, fmt.Errorf("injected SSH failure")
-		}
-		return nil, nil
-	}
 	for _, arg := range args {
 		if arg == "push" {
 			if r.beforePush != nil {
@@ -262,34 +250,6 @@ func TestResumeFailedPushDoesNotDuplicateCommit(t *testing.T) {
 	}
 }
 
-func TestResumeSSHFailureAndSafeScript(t *testing.T) {
-	a, _ := fixture(t)
-	a.config.OpenWrt = OpenWrt{Enabled: true, Host: "router.example.invalid", User: "rules", Port: 2222, IdentityFile: "/unused/test-key", KnownHostsFile: "/unused/known-hosts", JSONDirectory: "/srv/rules dir'quoted"}
-	f := &faultRunner{base: a.runner, failSSH: true}
-	a.runner = f
-	v, err := runTool(t, a, "rules_apply", previewEdit(t, a))
-	if err == nil || v.(map[string]any)["phase"] != "pushed" {
-		t.Fatalf("expected pushed state: %v %v", v, err)
-	}
-	if _, err = New(a.config); err != nil && filepath.IsAbs("/unused/test-key") {
-		t.Fatal(err)
-	}
-	f.failSSH = false
-	if _, err = runTool(t, a, "rules_resume", map[string]any{}); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(strings.Join(f.calls, ","), "push") != 1 {
-		t.Fatal("pushed a second time on SSH retry")
-	}
-	script := f.sshArgs[len(f.sshArgs)-1]
-	if !strings.Contains(script, "sha256sum -c") || !strings.Contains(script, "set -C") || !strings.Contains(script, shellQuote(a.config.OpenWrt.JSONDirectory)) || strings.Contains(script, "restart") || strings.Contains(script, ".yaml") {
-		t.Fatal("unsafe sync script")
-	}
-	if !json.Valid(f.sshInput) {
-		t.Fatal("not JSON")
-	}
-}
-
 func TestDirtyCheckoutAndStalePreviewAreRejected(t *testing.T) {
 	a, _ := fixture(t)
 	args := previewEdit(t, a)
@@ -399,5 +359,71 @@ func TestRepositoryLockBlocksAnotherInstance(t *testing.T) {
 	}
 	if _, err = runTool(t, b, "rules_status", map[string]any{}); err == nil {
 		t.Fatal("second instance acquired repository lock")
+	}
+}
+
+func TestLegacyJournalAfterPushCompletesWithoutRepublishing(t *testing.T) {
+	for _, phase := range []string{"pushed", "complete"} {
+		t.Run(phase, func(t *testing.T) {
+			a, _ := fixture(t)
+			if _, err := runTool(t, a, "rules_apply", previewEdit(t, a)); err != nil {
+				t.Fatal(err)
+			}
+			journalPath, err := a.journalPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(journalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var legacy map[string]any
+			if err = json.Unmarshal(data, &legacy); err != nil {
+				t.Fatal(err)
+			}
+			legacy["phase"] = phase
+			legacy["synced"] = false
+			data, err = json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(journalPath, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			f := &faultRunner{base: a.runner, failPush: true}
+			a.runner = f
+			result, err := runTool(t, a, "rules_resume", map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.(map[string]any)["phase"] != "complete" || len(f.calls) != 0 {
+				t.Fatal("unexpected recovery result")
+			}
+			status, err := runTool(t, a, "rules_status", map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"openwrt_enabled", "openwrt_synced"} {
+				if _, ok := status.(map[string]any)[key]; ok {
+					t.Fatal("retired status field returned")
+				}
+			}
+			if phase == "pushed" {
+				data, err = os.ReadFile(journalPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if bytes.Contains(data, []byte(`"synced"`)) {
+					t.Fatal("retired journal field persisted")
+				}
+			}
+		})
+	}
+}
+
+func TestRemovedConfigFieldIsRejected(t *testing.T) {
+	var c Config
+	if err := Decode([]byte(`{"openwrt":{"enabled":false}}`), &c); err == nil {
+		t.Fatal("retired config silently accepted")
 	}
 }

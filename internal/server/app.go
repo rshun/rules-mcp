@@ -86,8 +86,6 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		return a.status(ctx)
 	case "rules_resume":
 		return a.resume(ctx)
-	case "rules_sync":
-		return a.syncAll(ctx)
 	default:
 		return nil, fmt.Errorf("unknown tool")
 	}
@@ -294,7 +292,6 @@ type Journal struct {
 	OldYAMLHash   string `json:"old_yaml_hash"`
 	OldJSONHash   string `json:"old_json_hash"`
 	Phase         string `json:"phase"`
-	Synced        bool   `json:"synced"`
 }
 
 func (a *App) journalPath() (string, error) {
@@ -312,10 +309,15 @@ func (a *App) journal() (*Journal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot read operation journal")
 	}
-	var j Journal
-	if err = Decode(b, &j); err != nil {
+	// Accept the retired v0.1 journal field without retaining it in new journals.
+	var legacy struct {
+		Journal
+		Synced *bool `json:"synced,omitempty"`
+	}
+	if err = Decode(b, &legacy); err != nil {
 		return nil, fmt.Errorf("invalid operation journal; manual inspection required")
 	}
+	j := legacy.Journal
 	if !rules.NamePattern.MatchString(j.Name) {
 		return nil, fmt.Errorf("invalid operation journal name")
 	}
@@ -346,13 +348,11 @@ func (a *App) status(ctx context.Context) (any, error) {
 	}
 	state := "idle"
 	commit := ""
-	synced := false
 	if j != nil {
 		state = j.Phase
 		commit = j.Commit
-		synced = j.Synced
 	}
-	return map[string]any{"branch": a.config.Branch, "publish_branch": a.config.PublishBranch, "head": head, "phase": state, "commit": commit, "openwrt_synced": synced, "openwrt_enabled": a.config.OpenWrt.Enabled}, nil
+	return map[string]any{"branch": a.config.Branch, "publish_branch": a.config.PublishBranch, "head": head, "phase": state, "commit": commit}, nil
 }
 
 func (a *App) apply(ctx context.Context, args Arguments) (any, error) {
@@ -409,7 +409,7 @@ func (a *App) resume(ctx context.Context) (any, error) {
 
 func (a *App) finish(ctx context.Context, j *Journal) (any, error) {
 	err := a.advance(ctx, j)
-	result := map[string]any{"changed": true, "phase": j.Phase, "commit": j.Commit, "pushed": j.Phase == "pushed" || j.Phase == "complete", "openwrt_synced": j.Synced}
+	result := map[string]any{"changed": true, "phase": j.Phase, "commit": j.Commit, "pushed": j.Phase == "pushed" || j.Phase == "complete"}
 	if err != nil {
 		result["error"] = err.Error()
 		result["recovery"] = "Inspect rules_status, correct the cause, then call rules_resume. Do not repeat rules_apply."
@@ -541,15 +541,6 @@ func (a *App) advance(ctx context.Context, j *Journal) error {
 		if err = a.save(j); err != nil {
 			return err
 		}
-	}
-	if a.config.OpenWrt.Enabled {
-		if err = a.verifyPublished(ctx, j.Commit); err != nil {
-			return err
-		}
-		if err = a.syncFile(ctx, j.Name, j.JSON); err != nil {
-			return err
-		}
-		j.Synced = true
 	}
 	j.Phase = "complete"
 	return a.save(j)

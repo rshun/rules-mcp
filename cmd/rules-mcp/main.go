@@ -16,7 +16,7 @@ import (
 	"rules-mcp/internal/server"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
 	config := flag.String("config", "/etc/rules-mcp/config.json", "configuration file")
@@ -35,13 +35,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, name := range []string{"git", "ssh"} {
-		if name == "ssh" && !c.OpenWrt.Enabled {
-			continue
-		}
-		if _, err = exec.LookPath(name); err != nil {
-			log.Fatalf("required executable is missing: %s", name)
-		}
+	if _, err = exec.LookPath("git"); err != nil {
+		log.Fatal("required executable is missing: git")
 	}
 	a, err := server.New(c)
 	if err != nil {

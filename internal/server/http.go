@@ -14,7 +14,7 @@ import (
 
 const ProtocolVersion = "2025-11-25"
 
-var Version = "0.1.0"
+var Version = "0.2.0"
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -113,7 +113,7 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if !supportedVersion(version) {
 			version = ProtocolVersion
 		}
-		resp.Result = map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "rules-mcp", "version": Version}, "instructions": "Use rules_preview before rules_apply and pass its revision as expected_revision. Apply commits, atomically pushes configured branches, then syncs only JSON to OpenWrt. Use rules_resume for partial failures."}
+		resp.Result = map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "rules-mcp", "version": Version}, "instructions": "Use rules_preview before rules_apply and pass its revision as expected_revision. Apply commits and atomically pushes configured branches. Use rules_resume for partial failures."}
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
@@ -177,7 +177,7 @@ func toolResult(value any, err error) any {
 }
 
 var toolFields = map[string][]string{
-	"rules_list": {}, "rules_status": {}, "rules_resume": {}, "rules_sync": {},
+	"rules_list": {}, "rules_status": {}, "rules_resume": {},
 	"rules_read":    {"name", "offset", "limit"},
 	"rules_preview": {"name", "add", "remove"},
 	"rules_apply":   {"name", "add", "remove", "expected_revision"},
@@ -219,10 +219,9 @@ func toolDefinitions() []any {
 		{"rules_list", "列出 YAML 规则组。", true},
 		{"rules_read", "分页读取规则、版本和 JSON 一致性，默认 100 条、最多 500 条。", true},
 		{"rules_preview", "预览新增/删除规则并返回 revision；空修改可预览重新生成 JSON。不写规则。", true},
-		{"rules_apply", "拉取最新开发分支后应用变更，生成 JSON、自动 commit、原子 push 开发分支及 publish_branch，成功后同步 JSON 到 OpenWrt；不备份、不重启。必须提供预览 revision。", false},
+		{"rules_apply", "拉取最新开发分支后应用变更，生成 JSON、自动 commit、原子 push 开发分支及 publish_branch；不备份。必须提供预览 revision。", false},
 		{"rules_status", "查看最近操作阶段和提交，不查询远端。", true},
-		{"rules_resume", "继续未完成的写入、提交、推送或 OpenWrt 同步；不强推，不解决 Git 冲突。", false},
-		{"rules_sync", "将当前已提交且与远端一致的所有规则 JSON 同步到 OpenWrt，不删除远端文件、不重启服务。", false},
+		{"rules_resume", "继续未完成的写入、提交或推送；不强推，不解决 Git 冲突。", false},
 	}
 	result := []any{}
 	for _, s := range specs {
@@ -246,7 +245,7 @@ func toolDefinitions() []any {
 		if s.name == "rules_apply" {
 			required = append(required, "expected_revision")
 		}
-		result = append(result, map[string]any{"name": s.name, "description": s.description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}, "annotations": map[string]any{"readOnlyHint": s.readOnly, "destructiveHint": !s.readOnly, "idempotentHint": s.readOnly || s.name == "rules_sync" || s.name == "rules_resume", "openWorldHint": !s.readOnly}})
+		result = append(result, map[string]any{"name": s.name, "description": s.description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}, "annotations": map[string]any{"readOnlyHint": s.readOnly, "destructiveHint": !s.readOnly, "idempotentHint": s.readOnly || s.name == "rules_resume", "openWorldHint": !s.readOnly}})
 	}
 	return result
 }

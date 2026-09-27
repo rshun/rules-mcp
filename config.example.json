@@ -4,14 +4,5 @@
   "branch": "dev",
   "remote": "origin",
   "publish_branch": "master",
-  "timeout_seconds": 120,
-  "openwrt": {
-    "enabled": true,
-    "host": "openwrt.example.invalid",
-    "user": "your_ssh_user",
-    "port": 2222,
-    "identity_file": "/var/lib/rules-mcp/.ssh/id_ed25519",
-    "known_hosts_file": "/var/lib/rules-mcp/.ssh/known_hosts",
-    "json_directory": "/your/openwrt/json/directory"
-  }
+  "timeout_seconds": 120
 }

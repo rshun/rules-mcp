@@ -7,29 +7,18 @@ import (
 	"io"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 type Config struct {
-	Listen         string  `json:"listen"`
-	Repository     string  `json:"repository"`
-	Branch         string  `json:"branch"`
-	Remote         string  `json:"remote"`
-	PublishBranch  string  `json:"publish_branch"`
-	TimeoutSeconds int     `json:"timeout_seconds"`
-	OpenWrt        OpenWrt `json:"openwrt"`
-}
-type OpenWrt struct {
-	Enabled        bool   `json:"enabled"`
-	Host           string `json:"host"`
-	User           string `json:"user"`
-	Port           int    `json:"port"`
-	IdentityFile   string `json:"identity_file"`
-	KnownHostsFile string `json:"known_hosts_file"`
-	JSONDirectory  string `json:"json_directory"`
+	Listen         string `json:"listen"`
+	Repository     string `json:"repository"`
+	Branch         string `json:"branch"`
+	Remote         string `json:"remote"`
+	PublishBranch  string `json:"publish_branch"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 func Decode(data []byte, value any) error {
@@ -57,8 +46,6 @@ func LoadConfig(name string) (Config, error) {
 }
 
 var refPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_/-]*$`)
-var hostPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]*$`)
-var userPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
 
 func (c Config) Validate() error {
 	host, port, err := net.SplitHostPort(c.Listen)
@@ -81,18 +68,6 @@ func (c Config) Validate() error {
 	}
 	if c.TimeoutSeconds < 1 || c.TimeoutSeconds > 600 {
 		return fmt.Errorf("timeout_seconds must be between 1 and 600")
-	}
-	o := c.OpenWrt
-	if o.Enabled {
-		if !hostPattern.MatchString(o.Host) || !userPattern.MatchString(o.User) || o.Port < 1 || o.Port > 65535 {
-			return fmt.Errorf("invalid OpenWrt SSH host, user or port")
-		}
-		if !filepath.IsAbs(o.IdentityFile) || !filepath.IsAbs(o.KnownHostsFile) {
-			return fmt.Errorf("SSH identity and known_hosts must use absolute paths")
-		}
-		if !path.IsAbs(o.JSONDirectory) || path.Clean(o.JSONDirectory) != o.JSONDirectory || o.JSONDirectory == "/" || strings.ContainsAny(o.JSONDirectory, "\r\n\x00") {
-			return fmt.Errorf("OpenWrt JSON directory must be an absolute canonical directory other than root")
-		}
 	}
 	return nil
 }
