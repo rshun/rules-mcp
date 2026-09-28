@@ -40,6 +40,10 @@ jobs:
           ./dist/rules-mcp-linux-amd64 -version
           cd dist
           sha256sum --check SHA256SUMS
+      - name: Validate Debian installer
+        run: |
+          bash -n deploy/install.sh
+          python3 deploy/test_install.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rules-mcp-linux
@@ -51,3 +55,4 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
             dist/LICENSE
+            dist/install.sh

@@ -84,6 +84,55 @@ go test ./internal/rules -run TestExistingCorpusReadOnly -v
 
 ## Debian 首次部署
 
+发布包中的 `install.sh`（源码为 `deploy/install.sh`）提供交互式首次安装。按你的部署方式，脚本使用**已有普通用户和已有 rules 仓库**，不创建用户、不 clone 仓库、不切换分支，也不修改 Git 作者或 SSH 配置。Debian 无需 Python 或 Go，脚本只使用 Bash、系统已有工具和发布的二进制。
+
+先下载与你的 Debian 架构对应的发布压缩包及 `SHA256SUMS`，校验后解压到运行用户能访问的暂存目录。脚本和二进制位于压缩包同一层；不要放在该用户无法访问的 `/root` 目录。以下命令均在 **Debian 解压后的发布包目录**执行，不在 rules 仓库执行。
+
+先预览，填写真实的已有用户和仓库路径：
+
+```bash
+sudo bash ./install.sh --plan --user <EXISTING_USER> --repo /srv/rules
+```
+
+脚本按需询问二进制位置、程序目录、配置目录、服务名、监听地址、开发分支、remote、自动发布分支、超时和是否启动。`--plan` 会展示完整 JSON 和 systemd 文件，执行本地只读校验，不创建目录、不写入配置、不调用 systemd，也不访问 Git remote。直接以当前运行用户预览时可以不加 sudo；检查另一个用户的权限需要 sudo。
+
+参数确认后交互安装：
+
+```bash
+sudo bash ./install.sh --user <EXISTING_USER> --repo /srv/rules
+```
+
+脚本再次展示部署摘要，输入 **`INSTALL`** 后才创建文件；`--start no` 表示只安装并加载 unit，不启用或启动服务。执行操作包括：
+
+1. 以运行用户执行二进制 `-check`，验证生成配置与已有仓库。该步骤会按应用既有行为创建仓库内部锁文件。
+2. 准备 root 管理的程序及配置目录，安装二进制和 `config.json`。
+3. 生成 `/etc/systemd/system/<服务名>.service`，使用 `systemd-analyze verify` 校验后安装。
+4. 执行 `systemctl daemon-reload`；选择启动时才执行新服务的 `enable --now` 并检查 active 状态。不会停止或重启任何已有服务。
+
+完整参数示例（先去掉 `--yes` 或加 `--plan` 审查；传 `--yes` 即批准所列首次安装操作）：
+
+```bash
+sudo bash ./install.sh --yes \
+  --user <EXISTING_USER> \
+  --repo /srv/rules \
+  --binary "$PWD/rules-mcp" \
+  --install-dir /opt/rules-mcp \
+  --config-dir /etc/rules-mcp \
+  --service-name rules-mcp \
+  --listen 127.0.0.1:8787 \
+  --branch dev \
+  --remote origin \
+  --publish-branch master \
+  --timeout 120 \
+  --start no
+```
+
+`--publish-branch -` 关闭自动发布目标，仅推送开发分支。监听地址可选 `127.0.0.1:PORT` 或 `[::1]:PORT`，普通用户端口限 1024–65535。目录必须是无符号链接的规范绝对路径，仅支持字母、数字、下划线、点、横线和斜杠；程序、配置目录不能与 rules 仓库相互包含，已有父目录需由 root 管理且组/其他用户不可写。脚本拒绝覆盖任何已有二进制、配置或同名服务，也拒绝已有同名 drop-in。
+
+生成的 unit 使用所选用户及其主组，并设置 `HOME` 为该用户的真实主目录。`ProtectHome=read-only` 允许读取其现有 `~/.ssh` 和 Git 用户配置；`ProtectSystem=strict` 配合 `ReadWritePaths=<规则仓库>` 开放仓库写权限，并通过 `PrivateTmp` 提供隔离的临时目录。因此 rules 位于用户主目录下也可以使用，但仓库和主目录不能位于 `/tmp` 或 `/var/tmp`。Git 密钥、可信主机记录和非交互认证需要提前准备好。服务不继承当前终端的 SSH agent；加密私钥需要额外配置无人值守认证。预览和 `-check` 不验证 Git 远端权限，安装后的 Git 网络访问仍须以服务身份验收。
+
+安装失败会保留 `/var/tmp/rules-mcp-install.*` 暂存目录和已写入的文件，输出到达的阶段；不会自动删除文件、修改所有者、放宽权限或停止服务。排查时先查看输出、生成文件及 `journalctl`。已有部署的升级不由这个首次安装脚本接管，避免覆盖用户配置；需由管理员按实际状态制定更新/回退步骤。下方保留手动部署方式，便于已有环境按需配置。
+
 以下操作由管理员在 Debian 执行，未由开发过程自动执行。示例使用服务用户 `rules-mcp`，程序目录 `/opt/rules-mcp`，配置目录 `/etc/rules-mcp`，专用 Git checkout `/srv/rules`，SSH 资料目录 `/var/lib/rules-mcp/.ssh`。请替换占位符和部署所用的实际 SSH 端口。
 
 先检查已有工具、用户、目录和端口：
@@ -245,11 +294,11 @@ curl --fail-with-body http://127.0.0.1:8787/mcp \
 
 `.github/workflows/ci.yml` 在分支 push 和 PR 上执行 Linux 测试（含 race 检查）、vet、amd64/arm64 交叉编译与打包。Actions 使用固定提交版本。Go 工具链由 GitHub runner 的 setup-go 准备，不安装到 Debian；Go 项目仍无第三方模块。
 
-`.github/workflows/release.yml` 在推送 `v0.2.0` 这类标签后复用同一 CI，成功后自动发布 GitHub Release。预发布标签如 `v0.2.0-rc.1` 会标为 prerelease。Release 附件包括：
+`.github/workflows/release.yml` 在推送 `v0.3.0` 这类标签后复用同一 CI，成功后自动发布 GitHub Release。预发布标签如 `v0.3.0-rc.1` 会标为 prerelease。Release 附件包括：
 
 - `rules-mcp-linux-amd64`、`rules-mcp-linux-arm64`，可直接部署的 ELF 文件。
-- `rules-mcp_<版本>_linux_amd64.tar.gz`、`rules-mcp_<版本>_linux_arm64.tar.gz`，包含二进制、README、MIT LICENSE、配置示例、systemd unit。
-- `LICENSE` 与 `SHA256SUMS`，校验文件覆盖两个二进制、两个压缩包及许可证。
+- `rules-mcp_<版本>_linux_amd64.tar.gz`、`rules-mcp_<版本>_linux_arm64.tar.gz`，包含二进制、交互部署脚本 install.sh、README、MIT LICENSE、配置示例、systemd unit。
+- 独立的 `install.sh`、`LICENSE` 与 `SHA256SUMS`；校验文件覆盖两个二进制、两个压缩包、部署脚本及许可证。
 
 工作流使用 GitHub 自动提供的短期 `GITHUB_TOKEN`，无需配置个人 Token，不保存服务器 SSH 密钥。CI 只有读权限，发布 job 才有 `contents: write`。GitHub 负责构建分发，下载后仍部署到 Debian，不会在 GitHub 上托管常驻 MCP 服务。
 
@@ -267,8 +316,8 @@ git log -1 --oneline
 确认当前提交就是需要公开分发的版本后，下面两条命令创建并推送版本标签；推送会触发公开或私有 GitHub Release（随仓库可见性）：
 
 ```bash
-git tag -a v0.2.0 -m 'Release v0.2.0'
-git push origin v0.2.0
+git tag -a v0.3.0 -m 'Release v0.3.0'
+git push origin v0.3.0
 ```
 
 不要重复或移动已发布标签。上传失败时可能留下 draft release，应先在 GitHub 检查附件再决定补传/发布；工作流不覆盖已有 Release 附件。首个远端 Actions 运行结果才是 Linux CI 的实际证据，本地交叉编译不等于 GitHub 发布成功。
@@ -276,10 +325,10 @@ git push origin v0.2.0
 在 Debian 下载某个明确版本（按需要替换版本和架构）：
 
 ```bash
-curl --fail --location --output rules-mcp_v0.2.0_linux_amd64.tar.gz \
-  https://github.com/rshun/rules-mcp/releases/download/v0.2.0/rules-mcp_v0.2.0_linux_amd64.tar.gz
+curl --fail --location --output rules-mcp_v0.3.0_linux_amd64.tar.gz \
+  https://github.com/rshun/rules-mcp/releases/download/v0.3.0/rules-mcp_v0.3.0_linux_amd64.tar.gz
 curl --fail --location --output SHA256SUMS \
-  https://github.com/rshun/rules-mcp/releases/download/v0.2.0/SHA256SUMS
+  https://github.com/rshun/rules-mcp/releases/download/v0.3.0/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 

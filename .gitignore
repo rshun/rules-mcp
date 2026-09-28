@@ -4,3 +4,4 @@
 *.local.json
 *.test
 *.exe
+/deploy/__pycache__/

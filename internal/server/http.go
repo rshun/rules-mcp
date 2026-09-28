@@ -14,7 +14,7 @@ import (
 
 const ProtocolVersion = "2025-11-25"
 
-var Version = "0.2.0"
+var Version = "0.3.0"
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
