@@ -29,6 +29,10 @@ class InstallerTests(unittest.TestCase):
         self.repo.mkdir()
         self.user = pwd.getpwuid(os.getuid()).pw_name
         self.name = "rules-mcp-test-" + self.root.name.rsplit("-", 1)[-1]
+        # Hosted runners may make /opt writable for tool installation. Use an
+        # existing root-managed parent for planned outputs; never write there.
+        self.install_dir = Path("/etc") / self.name / "bin"
+        self.config_dir = Path("/etc") / self.name / "config"
         for args in [
             ["init", "--initial-branch=dev"],
             ["config", "user.name", "Installer Test"],
@@ -48,8 +52,8 @@ class InstallerTests(unittest.TestCase):
 
     def args(self):
         return ["--plan", "--user", self.user, "--repo", str(self.repo),
-                "--binary", str(BINARY), "--install-dir", "/opt/" + self.name,
-                "--config-dir", "/etc/" + self.name, "--service-name", self.name]
+                "--binary", str(BINARY), "--install-dir", str(self.install_dir),
+                "--config-dir", str(self.config_dir), "--service-name", self.name]
 
     def invoke(self, *extra):
         return subprocess.run(["bash", str(SCRIPT), *self.args(), *extra],
@@ -71,8 +75,8 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("ReadWritePaths=" + str(self.repo), p.stdout)
         self.assertIn("TimeoutStopSec=90", p.stdout)
         self.assertEqual(before, self.snapshot(), "plan changed the Git checkout")
-        self.assertFalse(Path("/opt/" + self.name).exists())
-        self.assertFalse(Path("/etc/" + self.name).exists())
+        self.assertFalse(self.install_dir.exists())
+        self.assertFalse(self.config_dir.exists())
 
     def test_rejects_invalid_inputs_before_installation(self):
         cases = [("--user", "root"), ("--branch", "master"), ("--branch", "main"),
@@ -117,7 +121,7 @@ class InstallerTests(unittest.TestCase):
         unit = p.stdout.split("将生成的 systemd unit：\n")[1].split("\n检查仅覆盖")[0]
         # Verification checks ExecStart existence, so point the executable to the
         # real test binary while retaining all generated options and directives.
-        unit = unit.replace("/opt/" + self.name + "/rules-mcp", str(BINARY))
+        unit = unit.replace(str(self.install_dir / "rules-mcp"), str(BINARY))
         unit_file = self.root / (self.name + ".service")
         unit_file.write_text(unit)
         result = subprocess.run(["systemd-analyze", "verify", str(unit_file)], capture_output=True, text=True)

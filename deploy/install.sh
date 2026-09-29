@@ -176,7 +176,7 @@ check_managed_ancestors() {
     if [[ -e "$dir" ]]; then
       [[ -d "$dir" ]] || fail '安装或配置路径的父级不是目录。'
       permissions=$(stat -c %a -- "$dir")
-      [[ "$(stat -c %u -- "$dir")" == 0 ]] && (( (8#$permissions & 022) == 0 )) || fail '安装和配置目录及其已有父目录必须由 root 持有，且组/其他用户不可写。'
+      [[ "$(stat -c %u -- "$dir")" == 0 ]] && (( (8#$permissions & 022) == 0 )) || fail "安装和配置目录及其已有父目录必须由 root 持有，且组/其他用户不可写：$dir"
       as_user test -x "$dir" || fail '运行用户不能访问安装或配置目录的父级。'
     fi
     dir=$(dirname -- "$dir")
