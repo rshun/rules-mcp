@@ -50,6 +50,6 @@ jobs:
           gh release create "$RELEASE_TAG" --verify-tag --draft \
             --title "$RELEASE_TAG" --generate-notes "${prerelease[@]}"
           gh release upload "$RELEASE_TAG" \
-            dist/rules-mcp-linux-amd64 dist/rules-mcp-linux-arm64 \
-            dist/*.tar.gz dist/SHA256SUMS dist/LICENSE dist/install.sh
+            dist/rules-mcp-linux-amd64 \
+            dist/*_linux_amd64.tar.gz dist/SHA256SUMS dist/LICENSE dist/install.sh
           gh release edit "$RELEASE_TAG" --draft=false

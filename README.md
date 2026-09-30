@@ -66,12 +66,10 @@ $env:CGO_ENABLED = '0'
 $env:GOOS = 'linux'
 $env:GOARCH = 'amd64'
 go build -trimpath -ldflags='-s -w' -o dist/rules-mcp-linux-amd64 ./cmd/rules-mcp
-$env:GOARCH = 'arm64'
-go build -trimpath -ldflags='-s -w' -o dist/rules-mcp-linux-arm64 ./cmd/rules-mcp
 # 构建后请重新打开终端运行本机测试，避免继续使用上述交叉编译环境变量。
 ```
 
-产物：`dist/rules-mcp-linux-amd64`、`dist/rules-mcp-linux-arm64`。`CGO_ENABLED=0` 生成不依赖动态 C 运行库的可执行文件。Debian 上无需安装 Go；按 `uname -m` 选择 `x86_64` 对应 amd64、`aarch64` 对应 arm64。
+产物：`dist/rules-mcp-linux-amd64`。`CGO_ENABLED=0` 生成不依赖动态 C 运行库的可执行文件。Debian 上无需安装 Go；发布包仅提供 amd64，目标机器的 `uname -m` 应为 `x86_64`。
 
 可选的本机仓库兼容性检查（只读取文件）：
 
@@ -86,7 +84,7 @@ go test ./internal/rules -run TestExistingCorpusReadOnly -v
 
 发布包中的 `install.sh`（源码为 `deploy/install.sh`）提供交互式首次安装。按你的部署方式，脚本使用**已有普通用户和已有 rules 仓库**，不创建用户、不 clone 仓库、不切换分支，也不修改 Git 作者或 SSH 配置。Debian 无需 Python 或 Go，脚本只使用 Bash、系统已有工具和发布的二进制。
 
-先下载与你的 Debian 架构对应的发布压缩包及 `SHA256SUMS`，校验后解压到运行用户能访问的暂存目录。脚本和二进制位于压缩包同一层；不要放在该用户无法访问的 `/root` 目录。以下命令均在 **Debian 解压后的发布包目录**执行，不在 rules 仓库执行。
+先下载适用于 Debian x86_64 的 amd64 发布压缩包及 `SHA256SUMS`，校验后解压到运行用户能访问的暂存目录。脚本和二进制位于压缩包同一层；不要放在该用户无法访问的 `/root` 目录。以下命令均在 **Debian 解压后的发布包目录**执行，不在 rules 仓库执行。
 
 先预览，填写真实的已有用户和仓库路径：
 
@@ -292,13 +290,15 @@ curl --fail-with-body http://127.0.0.1:8787/mcp \
 
 ## GitHub 构建与分发
 
-`.github/workflows/ci.yml` 在分支 push 和 PR 上执行 Linux 测试（含 race 检查）、vet、amd64/arm64 交叉编译与打包。Actions 使用固定提交版本。Go 工具链由 GitHub runner 的 setup-go 准备，不安装到 Debian；Go 项目仍无第三方模块。
+`.github/workflows/ci.yml` 在分支 push 和 PR 上执行 Linux 测试（含 race 检查）、vet、amd64 编译与打包。Actions 使用固定提交版本。Go 工具链由 GitHub runner 的 setup-go 准备，不安装到 Debian；Go 项目仍无第三方模块。
 
 `.github/workflows/release.yml` 在推送 `v0.3.0` 这类标签后复用同一 CI，成功后自动发布 GitHub Release。预发布标签如 `v0.3.0-rc.1` 会标为 prerelease。Release 附件包括：
 
-- `rules-mcp-linux-amd64`、`rules-mcp-linux-arm64`，可直接部署的 ELF 文件。
-- `rules-mcp_<版本>_linux_amd64.tar.gz`、`rules-mcp_<版本>_linux_arm64.tar.gz`，包含二进制、交互部署脚本 install.sh、README、MIT LICENSE、配置示例、systemd unit。
-- 独立的 `install.sh`、`LICENSE` 与 `SHA256SUMS`；校验文件覆盖两个二进制、两个压缩包、部署脚本及许可证。
+- `rules-mcp-linux-amd64`，可直接部署的 ELF 文件。
+- `rules-mcp_<版本>_linux_amd64.tar.gz`，包含二进制、交互部署脚本 install.sh、README、MIT LICENSE、配置示例、systemd unit。
+- 独立的 `install.sh`、`LICENSE` 与 `SHA256SUMS`；校验文件覆盖 amd64 二进制、压缩包、部署脚本及许可证。
+
+历史 Release 的 ARM 附件已移除，其校验清单已同步调整。历史压缩包内的 README 可能仍描述原来的双架构分发，以 Release 当前附件列表为准。
 
 工作流使用 GitHub 自动提供的短期 `GITHUB_TOKEN`，无需配置个人 Token，不保存服务器 SSH 密钥。CI 只有读权限，发布 job 才有 `contents: write`。GitHub 负责构建分发，下载后仍部署到 Debian，不会在 GitHub 上托管常驻 MCP 服务。
 

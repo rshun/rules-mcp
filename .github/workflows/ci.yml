@@ -51,8 +51,7 @@ jobs:
           retention-days: 14
           path: |
             dist/rules-mcp-linux-amd64
-            dist/rules-mcp-linux-arm64
-            dist/*.tar.gz
+            dist/*_linux_amd64.tar.gz
             dist/SHA256SUMS
             dist/LICENSE
             dist/install.sh
