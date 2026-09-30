@@ -164,10 +164,18 @@ func (a *App) read(args Arguments) (any, error) {
 	if conversionErr != nil {
 		conversionError = conversionErr.Error()
 	}
-	return map[string]any{"name": args.Name, "rules": items, "total": len(d.Rules), "offset": args.Offset, "next_offset": end, "revision": rules.Revision(y, j), "json_in_sync": jsonEqual(generated, j), "conversion_error": conversionError, "warnings": warningSummary(d)}, nil
+	validationErr := rules.ValidateJSON(j)
+	validationError := ""
+	if validationErr != nil {
+		validationError = validationErr.Error()
+	}
+	return map[string]any{"name": args.Name, "rules": items, "total": len(d.Rules), "offset": args.Offset, "next_offset": end, "revision": rules.Revision(y, j), "json_in_sync": jsonEqual(generated, j), "json_valid": validationErr == nil, "json_validation_error": validationError, "conversion_error": conversionError, "warnings": warningSummary(d)}, nil
 }
 
 func jsonEqual(a, b []byte) bool {
+	if rules.ValidateJSON(a) != nil || rules.ValidateJSON(b) != nil {
+		return false
+	}
 	var x, y any
 	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
 }
@@ -419,6 +427,22 @@ func (a *App) finish(ctx context.Context, j *Journal) (any, error) {
 }
 
 func (a *App) advance(ctx context.Context, j *Journal) error {
+	// Revalidate journals from disk, including committed operations, before any
+	// file replacement or push. Older binaries did not enforce this JSON profile.
+	if err := rules.ValidateJSON(j.JSON); err != nil {
+		return fmt.Errorf("pending JSON rule-set failed validation: %w", err)
+	}
+	document, err := rules.Parse(j.YAML)
+	if err != nil {
+		return fmt.Errorf("pending YAML failed validation: %w", err)
+	}
+	generated, err := document.JSON()
+	if err != nil {
+		return fmt.Errorf("pending rules failed validation: %w", err)
+	}
+	if !jsonEqual(generated, j.JSON) {
+		return fmt.Errorf("pending JSON does not match its YAML; manual inspection required")
+	}
 	head, err := a.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return err

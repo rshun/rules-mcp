@@ -16,7 +16,7 @@ import (
 	"rules-mcp/internal/server"
 )
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 func main() {
 	config := flag.String("config", "/etc/rules-mcp/config.json", "configuration file")

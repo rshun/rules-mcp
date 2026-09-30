@@ -28,9 +28,28 @@ HTTP 地址默认为 `http://127.0.0.1:8787/mcp`，不鉴权，仅允许绑定�
 
 JSON 保持现有 `version: 1` 源规则格式。同字段重复值去重；IP 类型可带 `no-resolve`，该 Clash 选项没有写入 sing-box 源规则集的对应字段，JSON 中只保留 CIDR 匹配值。CIDR 保留原文本；含主机位的前缀不会擅自重写。空规则组生成 `rules: []`，避免生成匹配全部流量的空对象。
 
+### JSON 规则验证
+
+内置校验参考 sing-box 官方的 [规则集源格式](https://sing-box.sagernet.org/configuration/rule-set/source-format/) 和 [Headless Rule](https://sing-box.sagernet.org/configuration/rule-set/headless-rule/)，仅校验本项目管理的 `version: 1` 及上述四个 JSON 匹配字段，不是任意 sing-box 配置或全部规则类型的通用校验器。
+
+- 顶层必须是单个 UTF-8 JSON 对象，包含整数 `version: 1` 和 `rules` 数组；拒绝语法错误、重复对象字段、尾随内容及额外顶层字段。
+- 每条规则必须为对象，匹配字段只支持 `domain`、`domain_suffix`、`domain_keyword`、`ip_cidr`。按官方格式允许单个字符串或字符串数组；`ip_cidr` 允许 IPv4/IPv6 地址或 CIDR，保留原始地址文本和前缀主机位。
+- 域名匹配值沿用项目的规则限制：非空、不含空白/控制字符、URL 路径或不支持的标点；不做 DNS 查询、IDNA 转换或 DNS 主机名全规范验证。域名后缀的前导点、Unicode 和下划线不擅自改写。
+- 项目额外禁止空匹配数组、空匹配项及无匹配字段的对象，避免无意生成全匹配规则。可显式指定 `type: "default"` 和 `invert: false`；逻辑规则、取反及其他 sing-box 字段不在当前 YAML 转换范围内。
+- `rules_read` 返回 `json_valid` 和 `json_validation_error`，错误定位到规则/字段/数组下标（从 0 开始），不回显实际规则值。`json_in_sync` 为 true 还要求 JSON 验证通过并与 YAML 生成结果一致。
+- 新生成 JSON、写文件前及失败续传的待发布内容都验证；续传还检查 YAML/JSON 一致性，验证失败不会继续写入、提交或推送。已有 JSON 不合法时，仍可通过 `rules_preview`、`rules_apply` 从合法 YAML 重建，验证旧 JSON 不会阻止修复。
+
+校验使用 Go 标准库，无需在 Debian 安装 sing-box。当前没有调用 sing-box 可执行文件，因此不能把内置校验通过等同于特定版本客户端的真实编译或加载成功。若机器已有对应版本的 sing-box，可在独立暂存目录对候选 JSON 执行官方命令作额外验收（会创建 `.srs` 文件，不改变 MCP 输出格式）：
+
+```bash
+sing-box rule-set compile --output candidate.srs candidate.json
+```
+
+回退应用时需配套原版本二进制；先检查未完成的操作日志。新版本可能阻止旧日志中的不合法或与 YAML 不一致的待发布 JSON，需人工核对原因后处理，不应修改日志绕过校验。
+
 仓库已有的 `- # 注释` 空条目会保留在 YAML 并报告告警，转换时跳过。已有带路径的域名规则允许读取和精确移除，但不允许生成 JSON 或作为新规则添加。
 
-只读检查当前 `C:\Dev\rules` 时发现：17 个 YAML、11,382 条规则、85 个空注释条目；`reject.yaml` 第 123、124 行的两个域名后缀含 `/v2`、`/v1`。这些实际文件没有修改。该组必须先经用户决定删除或替换异常条目，才能发布。
+只读检查当前 `C:\Dev\rules` 时发现：17 个 YAML、11,382 条规则、87 条校验告警（含空注释条目及无效域名）；`reject.yaml` 第 123、124 行的两个域名后缀含 `/v2`、`/v1`。`reject.json` 的 `rules[0].domain_suffix[98]` 也未通过域名匹配值校验，其余 16 个已有 JSON 通过当前校验。这些实际文件没有修改。该组必须先经用户决定删除或替换异常条目，才能发布。
 
 ## 从 v0.1.0 升级
 
@@ -243,7 +262,7 @@ curl --fail-with-body http://127.0.0.1:8787/mcp \
 | 工具 | 用途 |
 | --- | --- |
 | `rules_list` | 列出规则组 |
-| `rules_read` | 读取规则、revision、校验告警和 JSON 一致性；支持 offset、limit |
+| `rules_read` | 读取规则、revision、校验告警、JSON 验证结果和一致性；支持 offset、limit |
 | `rules_preview` | 预览 add/remove；返回用于应用的 revision，不写规则 |
 | `rules_apply` | 拉取、校验 revision、修改、生成 JSON、commit、atomic push |
 | `rules_status` | 最近操作阶段和 commit；不查询远端实时状态 |
@@ -292,7 +311,7 @@ curl --fail-with-body http://127.0.0.1:8787/mcp \
 
 `.github/workflows/ci.yml` 在分支 push 和 PR 上执行 Linux 测试（含 race 检查）、vet、amd64 编译与打包。Actions 使用固定提交版本。Go 工具链由 GitHub runner 的 setup-go 准备，不安装到 Debian；Go 项目仍无第三方模块。
 
-`.github/workflows/release.yml` 在推送 `v0.3.0` 这类标签后复用同一 CI，成功后自动发布 GitHub Release。预发布标签如 `v0.3.0-rc.1` 会标为 prerelease。Release 附件包括：
+`.github/workflows/release.yml` 在推送 `v0.4.0` 这类标签后复用同一 CI，成功后自动发布 GitHub Release。预发布标签如 `v0.4.0-rc.1` 会标为 prerelease。Release 附件包括：
 
 - `rules-mcp-linux-amd64`，可直接部署的 ELF 文件。
 - `rules-mcp_<版本>_linux_amd64.tar.gz`，包含二进制、交互部署脚本 install.sh、README、MIT LICENSE、配置示例、systemd unit。
@@ -316,8 +335,8 @@ git log -1 --oneline
 确认当前提交就是需要公开分发的版本后，下面两条命令创建并推送版本标签；推送会触发公开或私有 GitHub Release（随仓库可见性）：
 
 ```bash
-git tag -a v0.3.0 -m 'Release v0.3.0'
-git push origin v0.3.0
+git tag -a v0.4.0 -m 'Release v0.4.0'
+git push origin v0.4.0
 ```
 
 不要重复或移动已发布标签。上传失败时可能留下 draft release，应先在 GitHub 检查附件再决定补传/发布；工作流不覆盖已有 Release 附件。首个远端 Actions 运行结果才是 Linux CI 的实际证据，本地交叉编译不等于 GitHub 发布成功。
@@ -325,10 +344,10 @@ git push origin v0.3.0
 在 Debian 下载某个明确版本（按需要替换版本和架构）：
 
 ```bash
-curl --fail --location --output rules-mcp_v0.3.0_linux_amd64.tar.gz \
-  https://github.com/rshun/rules-mcp/releases/download/v0.3.0/rules-mcp_v0.3.0_linux_amd64.tar.gz
+curl --fail --location --output rules-mcp_v0.4.0_linux_amd64.tar.gz \
+  https://github.com/rshun/rules-mcp/releases/download/v0.4.0/rules-mcp_v0.4.0_linux_amd64.tar.gz
 curl --fail --location --output SHA256SUMS \
-  https://github.com/rshun/rules-mcp/releases/download/v0.3.0/SHA256SUMS
+  https://github.com/rshun/rules-mcp/releases/download/v0.4.0/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 

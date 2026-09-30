@@ -96,7 +96,7 @@ func TestExistingCorpusReadOnly(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatal("no corpus")
 	}
-	count, warnings, blocked := 0, 0, 0
+	count, warnings, blocked, invalidJSON := 0, 0, 0, 0
 	for _, file := range files {
 		b, err := os.ReadFile(file)
 		if err != nil {
@@ -105,6 +105,15 @@ func TestExistingCorpusReadOnly(t *testing.T) {
 		d, err := Parse(b)
 		if err != nil {
 			t.Fatalf("%s: %v", filepath.Base(file), err)
+		}
+		jsonName := strings.TrimSuffix(filepath.Base(file), ".yaml") + ".json"
+		existing, readErr := os.ReadFile(filepath.Join(dir, "json", jsonName))
+		if readErr != nil && !os.IsNotExist(readErr) {
+			t.Fatal(readErr)
+		}
+		if validationErr := ValidateJSON(existing); validationErr != nil {
+			invalidJSON++
+			t.Logf("existing JSON validation failed for %s: %v", jsonName, validationErr)
 		}
 		generated, err := d.JSON()
 		if err != nil {
@@ -124,7 +133,7 @@ func TestExistingCorpusReadOnly(t *testing.T) {
 		count += len(d.Rules)
 		warnings += len(d.Warnings)
 	}
-	t.Logf("read-only corpus: %d files, %d rules, %d warnings, %d files blocked by validation", len(files), count, warnings, blocked)
+	t.Logf("read-only corpus: %d files, %d rules, %d warnings, %d files blocked by conversion, %d existing JSON files missing or invalid", len(files), count, warnings, blocked, invalidJSON)
 }
 
 func TestCanRemoveInvalidLegacyDomainWithoutPublishingIt(t *testing.T) {

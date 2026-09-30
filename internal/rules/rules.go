@@ -174,7 +174,13 @@ func (d Document) JSON() ([]byte, error) {
 		list = append(list, fields)
 	}
 	b, err := json.MarshalIndent(Source{Version: 1, Rules: list}, "", "    ")
-	return append(b, '\n'), err
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateJSON(b); err != nil {
+		return nil, fmt.Errorf("generated rule-set failed validation: %w", err)
+	}
+	return append(b, '\n'), nil
 }
 
 type Edit struct {

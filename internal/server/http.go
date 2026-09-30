@@ -14,7 +14,7 @@ import (
 
 const ProtocolVersion = "2025-11-25"
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -217,7 +217,7 @@ func toolDefinitions() []any {
 	}
 	specs := []spec{
 		{"rules_list", "列出 YAML 规则组。", true},
-		{"rules_read", "分页读取规则、版本和 JSON 一致性，默认 100 条、最多 500 条。", true},
+		{"rules_read", "分页读取规则、版本、JSON 规则验证结果及 YAML/JSON 一致性，默认 100 条、最多 500 条。", true},
 		{"rules_preview", "预览新增/删除规则并返回 revision；空修改可预览重新生成 JSON。不写规则。", true},
 		{"rules_apply", "拉取最新开发分支后应用变更，生成 JSON、自动 commit、原子 push 开发分支及 publish_branch；不备份。必须提供预览 revision。", false},
 		{"rules_status", "查看最近操作阶段和提交，不查询远端。", true},
