@@ -306,7 +306,37 @@ func TestDivergedPublishBranchStopsBeforeWriting(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsExposedHTTPAndProtectedBranches(t *testing.T) {
+func TestApplyOnSingleWorkingBranch(t *testing.T) {
+	for _, branch := range []string{"master", "main"} {
+		t.Run(branch, func(t *testing.T) {
+			a, remote := fixture(t)
+			repo := a.config.Repository
+			testGit(t, repo, "branch", "-m", branch)
+			testGit(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+			a.config.Branch = branch
+			a.config.PublishBranch = ""
+			if err := a.config.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			untouched := testGit(t, remote, "rev-parse", "dev")
+			if _, err := runTool(t, a, "rules_apply", previewEdit(t, a)); err != nil {
+				t.Fatal(err)
+			}
+			head := testGit(t, repo, "rev-parse", "HEAD")
+			if head == untouched || testGit(t, remote, "rev-parse", branch) != head {
+				t.Fatal("working branch was not committed and pushed")
+			}
+			if testGit(t, remote, "rev-parse", "dev") != untouched {
+				t.Fatal("unconfigured branch changed")
+			}
+			if testGit(t, repo, "branch", "--show-current") != branch {
+				t.Fatal("working branch changed")
+			}
+		})
+	}
+}
+
+func TestConfigRejectsExposedHTTPAndInvalidBranches(t *testing.T) {
 	a, _ := fixture(t)
 	for _, address := range []string{"0.0.0.0:8787", "192.0.2.1:8787", "example.com:8787", ":8787"} {
 		c := a.config
@@ -315,12 +345,17 @@ func TestConfigRejectsExposedHTTPAndProtectedBranches(t *testing.T) {
 			t.Fatal("public listener accepted")
 		}
 	}
-	for _, branch := range []string{"master", "main", "-option", "dev/../master"} {
+	for _, branch := range []string{"", "-option", "dev/../master"} {
 		c := a.config
 		c.Branch = branch
 		if c.Validate() == nil {
 			t.Fatal("unsafe branch accepted")
 		}
+	}
+	c := a.config
+	c.PublishBranch = c.Branch
+	if c.Validate() == nil {
+		t.Fatal("same working and publish branch accepted")
 	}
 	for _, name := range []string{"../escape", "sample.yaml", "a/b"} {
 		if _, err := runTool(t, a, "rules_read", Arguments{Name: name}); err == nil {

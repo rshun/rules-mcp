@@ -21,7 +21,7 @@ rules-mcp Debian 首次部署（已有用户、已有 rules 仓库）
   --config-dir PATH         配置目录，默认 /etc/rules-mcp
   --service-name NAME       systemd 服务名（不带 .service），默认 rules-mcp
   --listen ADDRESS          127.0.0.1:PORT 或 [::1]:PORT，默认 127.0.0.1:8787
-  --branch NAME             当前开发分支，默认 dev；禁止 master/main
+  --branch NAME             当前工作分支，默认 dev；允许 master/main
   --remote NAME             已有 Git remote 名，默认 origin
   --publish-branch NAME     自动发布目标，默认 master；传 - 表示关闭
   --timeout SECONDS         操作超时 1–600，默认 120
@@ -99,7 +99,7 @@ collect() {
     ask CONFIG_DIR '配置文件目录'
     ask SERVICE_NAME 'systemd 服务名'
     ask LISTEN '本机监听地址'
-    ask BRANCH '当前开发分支'
+    ask BRANCH '当前工作分支'
     ask REMOTE '已有 Git remote 名称'
     ask PUBLISH_BRANCH '自动发布分支（输入 - 关闭）'
     ask TIMEOUT '操作超时秒数'
@@ -139,7 +139,7 @@ validate_parameters() {
     [[ -z "$value" && "$value" == "$PUBLISH_BRANCH" ]] && continue
     [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_/-]*$ && "$value" != *//* && "$value" != */ ]] || fail 'Git 分支或 remote 名称格式不受支持。'
   done
-  [[ -n "$BRANCH" && -n "$REMOTE" && "$BRANCH" != master && "$BRANCH" != main && "$BRANCH" != "$PUBLISH_BRANCH" ]] || fail '请使用开发分支，发布分支必须与开发分支不同。'
+  [[ -n "$BRANCH" && -n "$REMOTE" && "$BRANCH" != "$PUBLISH_BRANCH" ]] || fail '工作分支和 remote 不能为空，发布分支必须与工作分支不同；仅使用一个分支时，请将自动发布分支设为 -。'
   [[ "$LISTEN" =~ ^(127\.0\.0\.1|\[::1\]):([0-9]{1,5})$ ]] || fail '监听地址必须是 127.0.0.1:PORT 或 [::1]:PORT。'
   local port=$((10#${BASH_REMATCH[2]}))
   ((port >= 1024 && port <= 65535)) || fail '普通用户监听端口必须在 1024–65535 范围。'
@@ -200,7 +200,7 @@ preflight() {
   root=$(as_user git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || fail '运行用户不能访问该 Git 仓库。'
   [[ "$root" == "$REPO" ]] || fail 'repository 必须指向 Git 仓库根目录。'
   branch=$(as_user git -C "$REPO" branch --show-current 2>/dev/null) || fail '无法读取仓库分支。'
-  [[ "$branch" == "$BRANCH" ]] || fail '仓库当前分支与配置的开发分支不同；请先自行切换，脚本不会切换分支。'
+  [[ "$branch" == "$BRANCH" ]] || fail '仓库当前分支与配置的工作分支不同；请先自行切换，脚本不会切换分支。'
   as_user git -C "$REPO" rev-parse --verify HEAD >/dev/null 2>&1 || fail '规则仓库必须已有提交。'
   dirty=$(as_user git -C "$REPO" status --porcelain --untracked-files=all 2>/dev/null) || fail '无法检查仓库状态。'
   [[ -z "$dirty" ]] || fail '规则仓库存在未提交或未跟踪文件；请先处理。'

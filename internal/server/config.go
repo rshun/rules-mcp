@@ -63,8 +63,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("invalid Git branch or remote name")
 		}
 	}
-	if c.Branch == "" || c.Remote == "" || c.Branch == "main" || c.Branch == "master" || c.PublishBranch == c.Branch {
-		return fmt.Errorf("branch must be a development branch; publish_branch must differ")
+	if c.Branch == "" || c.Remote == "" || c.PublishBranch == c.Branch {
+		return fmt.Errorf("branch and remote must be non-empty; publish_branch must differ (use an empty publish_branch for a single branch)")
 	}
 	if c.TimeoutSeconds < 1 || c.TimeoutSeconds > 600 {
 		return fmt.Errorf("timeout_seconds must be between 1 and 600")

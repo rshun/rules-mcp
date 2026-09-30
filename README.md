@@ -7,8 +7,8 @@ HTTP 地址默认为 `http://127.0.0.1:8787/mcp`，不鉴权，仅允许绑定�
 ## 行为约定
 
 - YAML 是规则源，位置为仓库根目录的 `<name>.yaml`，对应 `json/<name>.json`。
-- 始终在配置的开发分支编辑和 commit；拒绝在 `master`、`main` 或 detached HEAD 修改。
-- `publish_branch: "master"` 开启自动快进发布到 master；设为 `""` 只推送开发分支。整个过程中不 checkout master。
+- 始终在配置的工作分支编辑和 commit；允许 `master`、`main`，拒绝分支不匹配或 detached HEAD。
+- `publish_branch: "master"` 开启自动快进发布到 master，必须与工作分支不同；设为 `""` 只推送工作分支。只有一个 master 分支时使用 `branch: "master"`、`publish_branch: ""`，变更会直接提交并推送到 master。
 - 自动发布用 `git push --atomic` 同时推送开发分支和发布分支，服务端必须支持 atomic push。不强推、不 rebase、不自动解决冲突。
 - 不生成 `.bak` 或旧文件副本。每个文件通过临时文件、flush 和 rename 替换；两个文件替换和 Git 发布不是一个原子事务。
 - 操作日志位于 `.git/rules-mcp-journal.json`，只保存目标新内容、旧内容哈希、commit 和阶段，用于失败续传；不是旧内容备份。日志权限为 `0600`。
@@ -127,7 +127,7 @@ sudo bash ./install.sh --yes \
   --start no
 ```
 
-`--publish-branch -` 关闭自动发布目标，仅推送开发分支。监听地址可选 `127.0.0.1:PORT` 或 `[::1]:PORT`，普通用户端口限 1024–65535。目录必须是无符号链接的规范绝对路径，仅支持字母、数字、下划线、点、横线和斜杠；程序、配置目录不能与 rules 仓库相互包含，已有父目录需由 root 管理且组/其他用户不可写。脚本拒绝覆盖任何已有二进制、配置或同名服务，也拒绝已有同名 drop-in。
+`--publish-branch -` 关闭自动发布目标，仅推送工作分支。单分支仓库可使用 `--branch master --publish-branch -`。监听地址可选 `127.0.0.1:PORT` 或 `[::1]:PORT`，普通用户端口限 1024–65535。目录必须是无符号链接的规范绝对路径，仅支持字母、数字、下划线、点、横线和斜杠；程序、配置目录不能与 rules 仓库相互包含，已有父目录需由 root 管理且组/其他用户不可写。脚本拒绝覆盖任何已有二进制、配置或同名服务，也拒绝已有同名 drop-in。
 
 生成的 unit 使用所选用户及其主组，并设置 `HOME` 为该用户的真实主目录。`ProtectHome=read-only` 允许读取其现有 `~/.ssh` 和 Git 用户配置；`ProtectSystem=strict` 配合 `ReadWritePaths=<规则仓库>` 开放仓库写权限，并通过 `PrivateTmp` 提供隔离的临时目录。因此 rules 位于用户主目录下也可以使用，但仓库和主目录不能位于 `/tmp` 或 `/var/tmp`。Git 密钥、可信主机记录和非交互认证需要提前准备好。服务不继承当前终端的 SSH agent；加密私钥需要额外配置无人值守认证。预览和 `-check` 不验证 Git 远端权限，安装后的 Git 网络访问仍须以服务身份验收。
 
@@ -187,7 +187,7 @@ sudo -u rules-mcp git -C /srv/rules config user.name 'Rules Publisher'
 sudo -u rules-mcp git -C /srv/rules config user.email 'rules-publisher@example.invalid'
 ```
 
-如果远端还没有 dev，需要先从 master 新建开发分支。下面创建分支，不编辑规则文件；最后一步会在远端新增 dev 分支：
+如果远端还没有 dev，可以保留单个 master 分支并关闭自动发布；如果需要独立的开发和发布分支，可先从 master 新建开发分支。下面创建分支，不编辑规则文件；最后一步会在远端新增 dev 分支：
 
 ```bash
 sudo -u rules-mcp git clone --branch master <RULES_GIT_SSH_URL> /srv/rules

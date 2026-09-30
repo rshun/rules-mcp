@@ -97,8 +97,8 @@ func (a *App) checkBranch(ctx context.Context) error {
 		return fmt.Errorf("configured path is not the repository root")
 	}
 	branch, err := a.git(ctx, "branch", "--show-current")
-	if err != nil || branch != a.config.Branch || branch == "main" || branch == "master" {
-		return fmt.Errorf("checkout must be on the configured development branch")
+	if err != nil || branch != a.config.Branch {
+		return fmt.Errorf("checkout must be on the configured working branch")
 	}
 	return nil
 }

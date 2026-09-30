@@ -79,7 +79,7 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(self.config_dir.exists())
 
     def test_rejects_invalid_inputs_before_installation(self):
-        cases = [("--user", "root"), ("--branch", "master"), ("--branch", "main"),
+        cases = [("--user", "root"), ("--branch", "master"), ("--publish-branch", "dev"),
                  ("--listen", "0.0.0.0:8787"), ("--listen", "127.0.0.1:80"),
                  ("--listen", "127.0.0.1:65536"), ("--timeout", "0"),
                  ("--timeout", "601"), ("--service-name", "bad%name"),
@@ -89,6 +89,18 @@ class InstallerTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case):
                 self.assertNotEqual(self.invoke(*case).returncode, 0)
+
+    def test_single_branch_plan(self):
+        for branch in ["master", "main"]:
+            with self.subTest(branch=branch):
+                self.git("branch", "-m", branch)
+                before = self.snapshot()
+                p = self.invoke("--branch", branch, "--publish-branch", "-")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                config = json.loads(p.stdout.split("将生成的 config.json：\n")[1].split("\n将生成的 systemd unit：")[0])
+                self.assertEqual(config["branch"], branch)
+                self.assertEqual(config["publish_branch"], "")
+                self.assertEqual(before, self.snapshot(), "plan changed the Git checkout")
 
     def test_dirty_wrong_branch_or_missing_remote_fail(self):
         self.assertNotEqual(self.invoke("--branch", "other").returncode, 0)
