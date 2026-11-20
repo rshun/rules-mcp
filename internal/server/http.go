@@ -14,7 +14,7 @@ import (
 
 const ProtocolVersion = "2025-11-25"
 
-var Version = "0.4.0"
+var Version = "0.5.0"
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -113,7 +113,7 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if !supportedVersion(version) {
 			version = ProtocolVersion
 		}
-		resp.Result = map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "rules-mcp", "version": Version}, "instructions": "Use rules_preview before rules_apply and pass its revision as expected_revision. Apply commits and atomically pushes configured branches. Use rules_resume for partial failures."}
+		resp.Result = map[string]any{"protocolVersion": version, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "rules-mcp", "version": Version}, "instructions": "Use rules_compare to check whether local HEAD matches remote and rules_pull to fast-forward the local working branch. Use rules_preview before rules_apply and pass its revision as expected_revision. Apply commits and atomically pushes configured branches. Use rules_resume for partial failures."}
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
@@ -178,6 +178,7 @@ func toolResult(value any, err error) any {
 
 var toolFields = map[string][]string{
 	"rules_list": {}, "rules_status": {}, "rules_resume": {},
+	"rules_pull": {}, "rules_compare": {},
 	"rules_read":    {"name", "offset", "limit"},
 	"rules_preview": {"name", "add", "remove"},
 	"rules_apply":   {"name", "add", "remove", "expected_revision"},
@@ -212,16 +213,18 @@ func validateArguments(name string, raw json.RawMessage) error {
 
 func toolDefinitions() []any {
 	type spec struct {
-		name, description string
-		readOnly          bool
+		name, description                            string
+		readOnly, destructive, idempotent, openWorld bool
 	}
 	specs := []spec{
-		{"rules_list", "列出 YAML 规则组。", true},
-		{"rules_read", "分页读取规则、版本、JSON 规则验证结果及 YAML/JSON 一致性，默认 100 条、最多 500 条。", true},
-		{"rules_preview", "预览新增/删除规则并返回 revision；空修改可预览重新生成 JSON。不写规则。", true},
-		{"rules_apply", "拉取最新开发分支后应用变更，生成 JSON、自动 commit、原子 push 开发分支及 publish_branch；不备份。必须提供预览 revision。", false},
-		{"rules_status", "查看最近操作阶段和提交，不查询远端。", true},
-		{"rules_resume", "继续未完成的写入、提交或推送；不强推，不解决 Git 冲突。", false},
+		{"rules_list", "列出 YAML 规则组。", true, false, true, false},
+		{"rules_read", "分页读取规则、版本、JSON 规则验证结果及 YAML/JSON 一致性，默认 100 条、最多 500 条。", true, false, true, false},
+		{"rules_preview", "预览新增/删除规则并返回 revision；空修改可预览重新生成 JSON。不写规则。", true, false, true, false},
+		{"rules_apply", "拉取最新开发分支后应用变更，生成 JSON、自动 commit、原子 push 开发分支及 publish_branch；不备份。必须提供预览 revision。", false, true, false, true},
+		{"rules_status", "查看最近操作阶段和提交，不查询远端。", true, false, true, false},
+		{"rules_resume", "继续未完成的写入、提交或推送；不强推，不解决 Git 冲突。", false, true, true, true},
+		{"rules_pull", "以纯快进方式从远端拉取配置的工作分支到本地；要求工作区干净且无未完成操作，不合并、不强拉、不自动解决冲突。", false, false, true, true},
+		{"rules_compare", "只读比对本地 HEAD 与远端配置分支 HEAD 的 Git commit hash（使用 ls-remote，不改动本地仓库）。", true, false, true, true},
 	}
 	result := []any{}
 	for _, s := range specs {
@@ -245,7 +248,7 @@ func toolDefinitions() []any {
 		if s.name == "rules_apply" {
 			required = append(required, "expected_revision")
 		}
-		result = append(result, map[string]any{"name": s.name, "description": s.description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}, "annotations": map[string]any{"readOnlyHint": s.readOnly, "destructiveHint": !s.readOnly, "idempotentHint": s.readOnly || s.name == "rules_resume", "openWorldHint": !s.readOnly}})
+		result = append(result, map[string]any{"name": s.name, "description": s.description, "inputSchema": map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}, "annotations": map[string]any{"readOnlyHint": s.readOnly, "destructiveHint": s.destructive, "idempotentHint": s.idempotent, "openWorldHint": s.openWorld}})
 	}
 	return result
 }

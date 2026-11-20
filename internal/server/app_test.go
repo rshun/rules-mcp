@@ -462,3 +462,272 @@ func TestRemovedConfigFieldIsRejected(t *testing.T) {
 		t.Fatal("retired config silently accepted")
 	}
 }
+
+func pushRemoteFiles(t *testing.T, remote, branch string, files map[string][]byte, message string) string {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "remote-edit")
+	testGit(t, filepath.Dir(clone), "clone", "--branch", branch, remote, clone)
+	testGit(t, clone, "config", "user.name", "Test")
+	testGit(t, clone, "config", "user.email", "test@example.invalid")
+	for relPath, content := range files {
+		target := filepath.Join(clone, filepath.FromSlash(relPath))
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, clone, "add", relPath)
+	}
+	testGit(t, clone, "commit", "-m", message)
+	testGit(t, clone, "push", "origin", branch)
+	return testGit(t, clone, "rev-parse", "HEAD")
+}
+
+func optionalRef(dir, ref string) (string, bool) {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+func TestCompareMatchesAndDetectsRemoteAdvanceWithoutMutatingLocal(t *testing.T) {
+	a, remote := fixture(t)
+	oldHead := testGit(t, a.config.Repository, "rev-parse", "HEAD")
+	v, err := runTool(t, a, "rules_compare", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := v.(map[string]any)
+	if got["remote"] != "origin" || got["branch"] != "dev" || got["local_head"] != oldHead || got["remote_head"] != oldHead || got["in_sync"] != true || got["hash_format"] != "sha1" || got["publish_branch"] != "master" || got["remote_publish_head"] != oldHead || got["publish_in_sync"] != true {
+		t.Fatalf("unexpected initial compare result: %v", got)
+	}
+
+	newHead := pushRemoteFiles(t, remote, "dev", map[string][]byte{"remote.txt": []byte("remote change\n")}, "remote dev change")
+	beforeRef, beforeExists := optionalRef(a.config.Repository, "refs/remotes/origin/dev")
+	v, err = runTool(t, a, "rules_compare", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = v.(map[string]any)
+	if got["in_sync"] != false || got["local_head"] != oldHead || got["remote_head"] != newHead || got["remote_publish_head"] != oldHead || got["publish_in_sync"] != true {
+		t.Fatalf("unexpected out-of-sync compare result: %v", got)
+	}
+	if testGit(t, a.config.Repository, "rev-parse", "HEAD") != oldHead {
+		t.Fatal("compare modified local HEAD")
+	}
+	afterRef, afterExists := optionalRef(a.config.Repository, "refs/remotes/origin/dev")
+	if afterExists != beforeExists || afterRef != beforeRef || afterRef == newHead {
+		t.Fatalf("compare mutated local remote-tracking ref: before=(%q,%v) after=(%q,%v)", beforeRef, beforeExists, afterRef, afterExists)
+	}
+	if _, err := os.Stat(filepath.Join(a.config.Repository, ".git", "rules-mcp-journal.json")); !os.IsNotExist(err) {
+		t.Fatal("compare created journal file")
+	}
+
+	if err := os.WriteFile(filepath.Join(a.config.Repository, "untracked.txt"), []byte("note"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = runTool(t, a, "rules_compare", map[string]any{}); err != nil || v.(map[string]any)["remote_head"] != newHead {
+		t.Fatalf("compare should stay read-only with untracked files: v=%v err=%v", v, err)
+	}
+
+	b, _ := fixture(t)
+	testGit(t, b.config.Repository, "branch", "-m", "master")
+	testGit(t, b.config.Repository, "push", "origin", "HEAD:refs/heads/master")
+	b.config.Branch = "master"
+	b.config.PublishBranch = ""
+	v, err = runTool(t, b, "rules_compare", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	single := v.(map[string]any)
+	if single["in_sync"] != true || single["local_head"] != single["remote_head"] {
+		t.Fatalf("unexpected single-branch compare result: %v", single)
+	}
+	for _, key := range []string{"publish_branch", "remote_publish_head", "publish_in_sync"} {
+		if _, ok := single[key]; ok {
+			t.Fatalf("unexpected publish field %s in single-branch compare: %v", key, single)
+		}
+	}
+
+	testGit(t, b.config.Repository, "branch", "-m", "missing")
+	b.config.Branch = "missing"
+	if _, err = runTool(t, b, "rules_compare", map[string]any{}); err == nil {
+		t.Fatal("missing remote branch accepted")
+	}
+}
+
+func TestPullFastForwardsCleanCheckoutAndReportsUpToDate(t *testing.T) {
+	a, remote := fixture(t)
+	oldHead := testGit(t, a.config.Repository, "rev-parse", "HEAD")
+	v, err := runTool(t, a, "rules_pull", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := v.(map[string]any)
+	if got["remote"] != "origin" || got["branch"] != "dev" || got["previous_head"] != oldHead || got["head"] != oldHead || got["updated"] != false {
+		t.Fatalf("unexpected initial pull result: %v", got)
+	}
+
+	updatedYAML := []byte("payload:\n# test\n  - DOMAIN,example.com\n  - DOMAIN-SUFFIX,remote.example\n")
+	d, err := rules.Parse(updatedYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedJSON, err := d.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newHead := pushRemoteFiles(t, remote, "dev", map[string][]byte{
+		"sample.yaml":      updatedYAML,
+		"json/sample.json": updatedJSON,
+	}, "remote rules update")
+
+	v, err = runTool(t, a, "rules_pull", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = v.(map[string]any)
+	if got["previous_head"] != oldHead || got["head"] != newHead || got["updated"] != true {
+		t.Fatalf("unexpected fast-forward pull result: %v", got)
+	}
+	if testGit(t, a.config.Repository, "rev-parse", "HEAD") != newHead {
+		t.Fatal("local HEAD was not fast-forwarded")
+	}
+	if state := testGit(t, a.config.Repository, "status", "--porcelain"); state != "" {
+		t.Fatalf("dirty worktree after pull: %q", state)
+	}
+	diskYAML, err := os.ReadFile(filepath.Join(a.config.Repository, "sample.yaml"))
+	if err != nil || !bytes.Equal(diskYAML, updatedYAML) {
+		t.Fatal("updated YAML not present after pull")
+	}
+	diskJSON, err := os.ReadFile(filepath.Join(a.config.Repository, "json", "sample.json"))
+	if err != nil || !bytes.Equal(diskJSON, updatedJSON) {
+		t.Fatal("updated JSON not present after pull")
+	}
+
+	cmp, err := runTool(t, a, "rules_compare", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmpMap := cmp.(map[string]any)
+	if cmpMap["in_sync"] != true || cmpMap["local_head"] != newHead || cmpMap["remote_head"] != newHead || cmpMap["publish_in_sync"] != false {
+		t.Fatalf("unexpected compare after pull: %v", cmpMap)
+	}
+
+	v, err = runTool(t, a, "rules_pull", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = v.(map[string]any)
+	if got["previous_head"] != newHead || got["head"] != newHead || got["updated"] != false {
+		t.Fatalf("unexpected repeat pull result: %v", got)
+	}
+
+	b, remoteB := fixture(t)
+	testGit(t, b.config.Repository, "branch", "-m", "master")
+	testGit(t, b.config.Repository, "push", "origin", "HEAD:refs/heads/master")
+	b.config.Branch = "master"
+	b.config.PublishBranch = ""
+	newMasterHead := pushRemoteFiles(t, remoteB, "master", map[string][]byte{"single.txt": []byte("ok\n")}, "master update")
+	v, err = runTool(t, b, "rules_pull", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	single := v.(map[string]any)
+	if single["branch"] != "master" || single["head"] != newMasterHead || single["updated"] != true {
+		t.Fatalf("unexpected single-branch pull result: %v", single)
+	}
+}
+
+func TestPullRejectsDirtyDivergedAndPendingJournal(t *testing.T) {
+	a, _ := fixture(t)
+	oldHead := testGit(t, a.config.Repository, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(a.config.Repository, "unrelated.txt"), []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTool(t, a, "rules_pull", map[string]any{}); err == nil {
+		t.Fatal("dirty checkout accepted by rules_pull")
+	}
+	if testGit(t, a.config.Repository, "rev-parse", "HEAD") != oldHead {
+		t.Fatal("dirty rejection modified HEAD")
+	}
+
+	b, _ := fixture(t)
+	if err := os.WriteFile(filepath.Join(b.config.Repository, "local.txt"), []byte("ahead"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, b.config.Repository, "add", "local.txt")
+	testGit(t, b.config.Repository, "commit", "-m", "unpushed local commit")
+	aheadHead := testGit(t, b.config.Repository, "rev-parse", "HEAD")
+	if _, err := runTool(t, b, "rules_pull", map[string]any{}); err == nil {
+		t.Fatal("unpushed local commit accepted by rules_pull")
+	}
+	if testGit(t, b.config.Repository, "rev-parse", "HEAD") != aheadHead {
+		t.Fatal("unpushed check modified HEAD")
+	}
+
+	c, remoteC := fixture(t)
+	pushRemoteFiles(t, remoteC, "dev", map[string][]byte{"remote.txt": []byte("remote")}, "remote commit")
+	if err := os.WriteFile(filepath.Join(c.config.Repository, "local.txt"), []byte("local"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, c.config.Repository, "add", "local.txt")
+	testGit(t, c.config.Repository, "commit", "-m", "diverged local commit")
+	divergedHead := testGit(t, c.config.Repository, "rev-parse", "HEAD")
+	if _, err := runTool(t, c, "rules_pull", map[string]any{}); err == nil {
+		t.Fatal("diverged branch accepted by rules_pull")
+	}
+	if testGit(t, c.config.Repository, "rev-parse", "HEAD") != divergedHead {
+		t.Fatal("diverged rejection modified HEAD")
+	}
+
+	d, _ := fixture(t)
+	f := &faultRunner{base: d.runner, failPush: true}
+	d.runner = f
+	if _, err := runTool(t, d, "rules_apply", previewEdit(t, d)); err == nil {
+		t.Fatal("expected push failure")
+	}
+	d.runner = f.base
+	pendingHead := testGit(t, d.config.Repository, "rev-parse", "HEAD")
+	_, err := runTool(t, d, "rules_pull", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "unfinished operation") {
+		t.Fatalf("pending journal not blocked: %v", err)
+	}
+	if testGit(t, d.config.Repository, "rev-parse", "HEAD") != pendingHead {
+		t.Fatal("pending journal rejection modified HEAD")
+	}
+}
+
+func TestParseRemoteHeadsAndHashHelpers(t *testing.T) {
+	sha1 := strings.Repeat("a", 40)
+	sha256 := strings.Repeat("0123456789abcdef", 4)
+	if !isHexHash(sha1) || !isHexHash(sha256) {
+		t.Fatal("valid commit hashes rejected")
+	}
+	if hashFormat(sha1) != "sha1" || hashFormat(sha256) != "sha256" {
+		t.Fatal("wrong hash format detected")
+	}
+	for _, bad := range []string{"", strings.Repeat("a", 39), strings.Repeat("a", 41), strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 40), strings.Repeat("g", 40)} {
+		if isHexHash(bad) {
+			t.Fatalf("invalid hash accepted: %q", bad)
+		}
+	}
+	refs, err := parseRemoteHeads("")
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("empty ls-remote failed: refs=%v err=%v", refs, err)
+	}
+	refs, err = parseRemoteHeads(sha1 + "\trefs/heads/dev\r\n" + sha256 + "\trefs/heads/master\n")
+	if err != nil || refs["refs/heads/dev"] != sha1 || refs["refs/heads/master"] != sha256 {
+		t.Fatalf("unexpected parsed refs: refs=%v err=%v", refs, err)
+	}
+	for _, malformed := range []string{"bad-line", sha1 + " refs/heads/dev", "zzzz\trefs/heads/dev", sha1 + "\t"} {
+		if _, err := parseRemoteHeads(malformed); err == nil {
+			t.Fatalf("malformed ls-remote line accepted: %q", malformed)
+		}
+	}
+}

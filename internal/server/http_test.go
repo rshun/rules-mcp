@@ -47,11 +47,29 @@ func TestHTTPProtocolAndTools(t *testing.T) {
 	w = request(a, `{"jsonrpc":"2.0","id":"list","method":"tools/list"}`, nil)
 	var resp struct {
 		Result struct {
-			Tools []any `json:"tools"`
+			Tools []map[string]any `json:"tools"`
 		} `json:"result"`
 	}
-	if json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Result.Tools) != 6 {
+	if json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Result.Tools) != 8 {
 		t.Fatal("tool discovery failed")
+	}
+	tools := map[string]map[string]any{}
+	for _, tool := range resp.Result.Tools {
+		name, _ := tool["name"].(string)
+		tools[name] = tool
+	}
+	for _, name := range []string{"rules_pull", "rules_compare"} {
+		if _, ok := tools[name]; !ok {
+			t.Fatalf("missing tool %s", name)
+		}
+	}
+	pullAnn, _ := tools["rules_pull"]["annotations"].(map[string]any)
+	if pullAnn["readOnlyHint"] != false || pullAnn["destructiveHint"] != false || pullAnn["idempotentHint"] != true || pullAnn["openWorldHint"] != true {
+		t.Fatalf("unexpected rules_pull annotations: %v", pullAnn)
+	}
+	compareAnn, _ := tools["rules_compare"]["annotations"].(map[string]any)
+	if compareAnn["readOnlyHint"] != true || compareAnn["destructiveHint"] != false || compareAnn["idempotentHint"] != true || compareAnn["openWorldHint"] != true {
+		t.Fatalf("unexpected rules_compare annotations: %v", compareAnn)
 	}
 	if strings.Contains(w.Body.String(), "rules_sync") {
 		t.Fatal("removed tool still advertised")
@@ -64,9 +82,43 @@ func TestHTTPProtocolAndTools(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"isError":false`) || !strings.Contains(w.Body.String(), "example.com") {
 		t.Fatalf("read failed: %s", w.Body.String())
 	}
+	for _, tc := range []struct {
+		name, field string
+		want        any
+	}{
+		{"rules_compare", "in_sync", true},
+		{"rules_pull", "updated", false},
+	} {
+		w = request(a, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"`+tc.name+`","arguments":{}}}`, nil)
+		var callResp struct {
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+			Error *rpcError `json:"error"`
+		}
+		if json.Unmarshal(w.Body.Bytes(), &callResp) != nil || callResp.Error != nil || callResp.Result.IsError || len(callResp.Result.Content) != 1 {
+			t.Fatalf("%s failed: %s", tc.name, w.Body.String())
+		}
+		var payload map[string]any
+		if json.Unmarshal([]byte(callResp.Result.Content[0].Text), &payload) != nil || payload[tc.field] != tc.want {
+			t.Fatalf("unexpected %s payload: %s", tc.name, callResp.Result.Content[0].Text)
+		}
+		if tc.name == "rules_compare" && payload["hash_format"] != "sha1" {
+			t.Fatalf("unexpected hash_format: %v", payload)
+		}
+	}
 	w = request(a, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rules_preview","arguments":{"name":"sample","typo":true}}}`, nil)
 	if !strings.Contains(w.Body.String(), `"isError":true`) {
 		t.Fatal("unknown argument accepted")
+	}
+	for _, name := range []string{"rules_compare", "rules_pull"} {
+		w = request(a, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"`+name+`","arguments":{"typo":true}}}`, nil)
+		if !strings.Contains(w.Body.String(), `"isError":true`) {
+			t.Fatalf("unknown argument accepted for %s", name)
+		}
 	}
 	w = request(a, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"rules_read","arguments":{"name":"../escape"}}}`, nil)
 	if !strings.Contains(w.Body.String(), `"isError":true`) {
