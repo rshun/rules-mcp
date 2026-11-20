@@ -267,6 +267,13 @@ curl --fail-with-body http://127.0.0.1:8787/mcp \
 | `rules_apply` | 拉取、校验 revision、修改、生成 JSON、commit、atomic push |
 | `rules_status` | 最近操作阶段和 commit；不查询远端实时状态 |
 | `rules_resume` | 继续最近一次失败的操作 |
+| `rules_compare` | 使用 `git ls-remote` 只读比对本地与远端配置分支的 HEAD commit hash |
+| `rules_pull` | 纯快进方式拉取远端工作分支到本地；不合并、不强拉 |
+
+同步与比对工具说明：
+
+- `rules_compare` 使用 `git ls-remote` 只读查询远端分支 HEAD 并与本地 `HEAD` 原生 commit hash 比对（兼容 40 位 SHA-1 与 64 位 SHA-256 仓库，不改动 `.git` 与工作区）。配置了 `publish_branch` 时同时返回发布分支远端 HEAD 及一致性字段。
+- `rules_pull` 以纯快进方式拉取配置的工作分支到本地，要求工作区干净、无未完成操作、无本地未推送或分叉提交，不自动合并、不强拉。
 
 预览工具参数示例：
 
