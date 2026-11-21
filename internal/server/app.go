@@ -86,6 +86,10 @@ func (a *App) Execute(ctx context.Context, name string, raw json.RawMessage) (an
 		return a.status(ctx)
 	case "rules_resume":
 		return a.resume(ctx)
+	case "rules_pull":
+		return a.pull(ctx)
+	case "rules_compare":
+		return a.compare(ctx)
 	default:
 		return nil, fmt.Errorf("unknown tool")
 	}
@@ -255,13 +259,19 @@ func (a *App) clean(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) fetch(ctx context.Context) error {
-	args := []string{"fetch", "--no-tags", a.config.Remote, "+refs/heads/" + a.config.Branch + ":refs/remotes/" + a.config.Remote + "/" + a.config.Branch}
-	if a.config.PublishBranch != "" {
-		args = append(args, "+refs/heads/"+a.config.PublishBranch+":refs/remotes/"+a.config.Remote+"/"+a.config.PublishBranch)
+func (a *App) fetchRefs(ctx context.Context, branches ...string) error {
+	args := []string{"fetch", "--no-tags", a.config.Remote}
+	for _, branch := range branches {
+		if branch != "" {
+			args = append(args, "+refs/heads/"+branch+":refs/remotes/"+a.config.Remote+"/"+branch)
+		}
 	}
 	_, err := a.git(ctx, args...)
 	return err
+}
+
+func (a *App) fetch(ctx context.Context) error {
+	return a.fetchRefs(ctx, a.config.Branch, a.config.PublishBranch)
 }
 
 func (a *App) refresh(ctx context.Context) error {
@@ -361,6 +371,128 @@ func (a *App) status(ctx context.Context) (any, error) {
 		commit = j.Commit
 	}
 	return map[string]any{"branch": a.config.Branch, "publish_branch": a.config.PublishBranch, "head": head, "phase": state, "commit": commit}, nil
+}
+
+func (a *App) pull(ctx context.Context) (any, error) {
+	j, err := a.journal()
+	if err != nil {
+		return nil, err
+	}
+	if j != nil && j.Phase != "complete" {
+		return nil, fmt.Errorf("an unfinished operation exists; use rules_status and rules_resume")
+	}
+	if err := a.clean(ctx); err != nil {
+		return nil, err
+	}
+	previousHead, err := a.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if err := a.fetchRefs(ctx, a.config.Branch); err != nil {
+		return nil, fmt.Errorf("fetch failed: %w", err)
+	}
+	remoteRef := "refs/remotes/" + a.config.Remote + "/" + a.config.Branch
+	// Refuse implicit merges, rewrites, or pulling over local unpushed commits.
+	if _, err := a.git(ctx, "merge-base", "--is-ancestor", "HEAD", remoteRef); err != nil {
+		return nil, fmt.Errorf("local branch has unpushed commits or has diverged; cannot fast-forward")
+	}
+	if _, err := a.git(ctx, "merge", "--ff-only", remoteRef); err != nil {
+		return nil, fmt.Errorf("fast-forward pull failed: %w", err)
+	}
+	head, err := a.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"remote":        a.config.Remote,
+		"branch":        a.config.Branch,
+		"previous_head": previousHead,
+		"head":          head,
+		"updated":       head != previousHead,
+	}, nil
+}
+
+func (a *App) compare(ctx context.Context) (any, error) {
+	localHead, err := a.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if !isHexHash(localHead) {
+		return nil, fmt.Errorf("unexpected local HEAD commit hash")
+	}
+	branchRef := "refs/heads/" + a.config.Branch
+	args := []string{"ls-remote", "--heads", "--", a.config.Remote, branchRef}
+	publishRef := ""
+	if a.config.PublishBranch != "" {
+		publishRef = "refs/heads/" + a.config.PublishBranch
+		args = append(args, publishRef)
+	}
+	out, err := a.git(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("remote head query failed: %w", err)
+	}
+	refs, err := parseRemoteHeads(out)
+	if err != nil {
+		return nil, err
+	}
+	remoteHead, ok := refs[branchRef]
+	if !ok {
+		return nil, fmt.Errorf("remote working branch not found on configured remote")
+	}
+	result := map[string]any{
+		"remote":      a.config.Remote,
+		"branch":      a.config.Branch,
+		"local_head":  localHead,
+		"remote_head": remoteHead,
+		"in_sync":     localHead == remoteHead,
+		"hash_format": hashFormat(localHead),
+	}
+	if publishRef != "" {
+		publishHead, ok := refs[publishRef]
+		if !ok {
+			return nil, fmt.Errorf("remote publish branch not found on configured remote")
+		}
+		result["publish_branch"] = a.config.PublishBranch
+		result["remote_publish_head"] = publishHead
+		result["publish_in_sync"] = localHead == publishHead
+	}
+	return result, nil
+}
+
+func parseRemoteHeads(output string) (map[string]string, error) {
+	refs := map[string]string{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		oid, ref, ok := strings.Cut(line, "\t")
+		if !ok || !isHexHash(oid) || ref == "" {
+			return nil, fmt.Errorf("unexpected remote ref output")
+		}
+		refs[ref] = oid
+	}
+	return refs, nil
+}
+
+func isHexHash(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func hashFormat(oid string) string {
+	if len(oid) == 64 {
+		return "sha256"
+	}
+	return "sha1"
 }
 
 func (a *App) apply(ctx context.Context, args Arguments) (any, error) {
